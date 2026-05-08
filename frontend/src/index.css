@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+/* Tailwind v4 picks up `@theme` blocks here for design tokens. Keep this
+   file authoritative — App.tsx should not @import its own copy. */
+@theme {
+  --color-brand-50: #f5f7ff;
+  --color-brand-500: #6366f1;
+  --color-brand-700: #3730a3;
+}
+
+html, body, #root { height: 100%; }
