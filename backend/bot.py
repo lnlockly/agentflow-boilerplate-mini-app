@@ -22,11 +22,28 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+
+def _read_token_file() -> str:
+    """AgentFlow auto-bot writes the token into /workspace/bot_token.txt
+    (see auto-bot.ts:writeBotTokenFile). Fall back to that file if BOT_TOKEN
+    env var isn't set so the boilerplate works on AgentFlow without PR-Y
+    (PREVIEW_URL/.env injection) being landed yet."""
+    for path in ("/workspace/bot_token.txt", "./bot_token.txt"):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                tok = f.read().strip()
+                if tok:
+                    return tok
+        except (OSError, IOError):
+            continue
+    return ""
+
+
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip() or _read_token_file()
 PREVIEW_URL = os.environ.get("PREVIEW_URL", "").strip()
 
 if not BOT_TOKEN:
-    raise SystemExit("BOT_TOKEN is empty — set it in .env or via AgentFlow secrets.")
+    raise SystemExit("BOT_TOKEN is empty — set it in .env, /workspace/bot_token.txt, or via AgentFlow secrets.")
 if not PREVIEW_URL:
     # Don't crash — bot can still run, but the WebApp button would be
     # disabled. Log loudly so the operator sees it in pod logs.
