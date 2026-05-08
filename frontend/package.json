@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@twa-dev/sdk": "^8.0.2",
+    "axios": "^1.16.0",
     "canvas-confetti": "^1.9.3",
     "framer-motion": "^11.18.2",
     "lucide-react": "^0.468.0",
