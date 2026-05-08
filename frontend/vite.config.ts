@@ -8,5 +8,10 @@ import tailwindcss from '@tailwindcss/vite';
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: { host: '0.0.0.0', port: 5173 },
+  preview: {
+    host: '0.0.0.0',
+    port: 3000,
+    allowedHosts: ['proj-4yd1s6x1-u1.proj.agentflow.website'],
+  },
   build: { outDir: 'dist', sourcemap: false },
 });
