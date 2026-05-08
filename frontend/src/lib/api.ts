@@ -1,6 +1,6 @@
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 
-const DEFAULT_API_URL = 'https://hypefactory-backend-v2.proj.agentflow.website/api';
+const DEFAULT_API_URL = '/api';
 const TOKEN_STORAGE_KEY = 'hf_token';
 const rawApiUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
 export const API_BASE_URL = (rawApiUrl || DEFAULT_API_URL).replace(/\/+$/, '');
