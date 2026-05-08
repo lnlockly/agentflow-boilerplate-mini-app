@@ -1,6 +1,3 @@
 {
-  "files": [],
-  "references": [
-    { "path": "./frontend" }
-  ]
+  "exclude": ["node_modules", ".tools", ".services", ".runtime", ".build"]
 }
