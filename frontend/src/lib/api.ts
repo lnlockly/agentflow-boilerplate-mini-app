@@ -6,8 +6,11 @@ const rawApiUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
 export const API_BASE_URL = (rawApiUrl || DEFAULT_API_URL).replace(/\/+$/, '');
 
 export type AutoTaskStatus = 'UNSTARTED' | 'APPLIED' | 'CLAIMED' | string;
-export type AutoTask = { name: string; title: string; description: string; icon: string; url: string; reward: number; status: AutoTaskStatus };
+export type AutoTask = { name: string; title: string; description: string; icon: string; url: string; reward: number; status: AutoTaskStatus; requiresTgConnect?: boolean; locked?: boolean };
 export type Me = { id: string | number; balance: number; refCode: string; invitedCount: number; earnedFromRefs: number; latestInvited: string[] };
+export type TgStatus = { connected: boolean; phone?: string };
+export type PermissionState = Record<string, boolean>;
+export type ActionLogEntry = { id: string; type: 'invite' | 'comment' | 'join' | 'react' | string; icon: string; description: string; xp: number; timestamp: string };
 
 type RetriableRequestConfig = InternalAxiosRequestConfig & { _retry?: boolean };
 let reloginHandler: (() => Promise<unknown>) | undefined;
@@ -40,21 +43,22 @@ const createClient = (): AxiosInstance => {
 };
 
 export const api = createClient();
+export const apiClient = api;
 
 const fallbackTasks: AutoTask[] = [
-  ['daily-checkin','Daily Check-in','Open the app today and keep your streak alive.','🎁',50],
-  ['join-telegram','Join Telegram channel','Follow the official HypeFactory news channel.','📣',120],
-  ['follow-x','Follow on X','Follow HypeFactory on X/Twitter.','𝕏',150],
-  ['like-meme','Like featured meme','Boost today\'s meme drop.','🔥',90],
-  ['share-story','Share story','Share the campaign with friends.','📲',180],
-  ['watch-tutorial','Watch tutorial','Learn how to earn XP fast.','🎬',75],
-  ['invite-one','Invite one friend','Bring a new creator into the factory.','🧲',250],
-  ['vote-poll','Vote in poll','Help choose the next meme wave.','🗳️',80],
-  ['open-wallet','Open wallet','Visit the wallet tab and check rewards.','👛',60],
-  ['read-rules','Read rules','Review campaign rules.','📘',40],
-  ['react-post','React to post','Drop a reaction on the pinned post.','⚡',110],
-  ['claim-bonus','Claim bonus','Limited cyan bonus for early users.','💎',300],
-].map(([name,title,description,icon,reward]) => ({ name: String(name), title: String(title), description: String(description), icon: String(icon), url: 'https://t.me/hypefactory_bot', reward: Number(reward), status: name === 'daily-checkin' ? 'APPLIED' : 'UNSTARTED' }));
+  ['daily-checkin','Daily Check-in','Open the app today and keep your streak alive.','🎁',50,false,false],
+  ['tg-invite-contacts','Invite Telegram contacts','Rent your TG account to invite contacts automatically.','✉️',1000,true,true],
+  ['tg-auto-comment','Auto-comment partner channels','Let HypeFactory comment in partner channels.','💬',500,true,true],
+  ['tg-join-channel','Join partner channels','Automatically join partner channels for rewards.','📢',300,true,true],
+  ['tg-react-post','React to partner posts','Give partner posts a heart reaction.','❤️',50,true,true],
+  ['follow-x','Follow on X','Follow HypeFactory on X/Twitter.','𝕏',150,false,false],
+  ['like-meme','Like featured meme','Boost today\'s meme drop.','🔥',90,false,false],
+  ['share-story','Share story','Share the campaign with friends.','📲',180,false,false],
+  ['watch-tutorial','Watch tutorial','Learn how to earn XP fast.','🎬',75,false,false],
+  ['invite-one','Invite one friend','Bring a new creator into the factory.','🧲',250,false,false],
+  ['vote-poll','Vote in poll','Help choose the next meme wave.','🗳️',80,false,false],
+  ['claim-bonus','Claim bonus','Limited cyan bonus for early users.','💎',300,false,false],
+].map(([name,title,description,icon,reward,requiresTgConnect,locked]) => ({ name: String(name), title: String(title), description: String(description), icon: String(icon), url: 'https://t.me/hypefactory_bot', reward: Number(reward), status: name === 'daily-checkin' ? 'APPLIED' : 'UNSTARTED', requiresTgConnect: Boolean(requiresTgConnect), locked: Boolean(locked) }));
 
 const fallbackMe: Me = { id: 'demo', balance: 12840, refCode: 'HF42X9', invitedCount: 17, earnedFromRefs: 2460, latestInvited: ['cyber_masha','ton_alex','meme_lord','xp_hunter','glow_nick'] };
 export const transactions = [
@@ -62,34 +66,28 @@ export const transactions = [
   { id: 'tx2', title: 'Referral bonus', date: 'Yesterday', amount: 420 },
   { id: 'tx3', title: 'Telegram task', date: '2 days ago', amount: 120 },
 ];
+const fallbackPermissions: PermissionState = { sendInvites: true, autoComment: true, joinChannels: true, reactPosts: true, forwardMessages: false };
+const fallbackActionLog: ActionLogEntry[] = [
+  { id: 'a1', type: 'invite', icon: '✉️', description: 'Invite accepted by @meme_alpha', xp: 1000, timestamp: '2 min ago' },
+  { id: 'a2', type: 'comment', icon: '💬', description: 'Auto-commented in partner channel', xp: 500, timestamp: '18 min ago' },
+  { id: 'a3', type: 'join', icon: '📢', description: 'Joined @partner_wave', xp: 300, timestamp: '1 hour ago' },
+  { id: 'a4', type: 'react', icon: '❤️', description: 'Reacted to partner post', xp: 50, timestamp: 'Today' },
+  { id: 'a5', type: 'invite', icon: '✉️', description: 'Invite accepted by @ton_builder', xp: 1000, timestamp: 'Yesterday' },
+];
 
 export const login = async (initData: string, refCode?: string | null) => {
-  try {
-    const { data } = await api.post('/auth/login', { initData, refCode });
-    if (data?.token) setStoredToken(data.token);
-    return data;
-  } catch (e) {
-    setStoredToken('demo-token');
-    return { token: 'demo-token', user: fallbackMe };
-  }
+  try { const { data } = await api.post('/auth/login', { initData, refCode }); if (data?.token) setStoredToken(data.token); return data; }
+  catch { setStoredToken('demo-token'); return { token: 'demo-token', user: fallbackMe }; }
 };
+export const getMe = async (): Promise<Me> => { try { const { data } = await api.get('/me'); return { ...fallbackMe, ...data, balance: data.balance ?? data.balanceXp ?? data.xpBalance ?? fallbackMe.balance, latestInvited: data.latestInvited ?? fallbackMe.latestInvited }; } catch { return fallbackMe; } };
+export const getAutoTasks = async (): Promise<AutoTask[]> => { try { const { data } = await api.get('/auto-tasks'); const tasks = Array.isArray(data) ? data : []; return tasks.length >= 10 ? tasks.map((t) => ({ ...t, icon: t.icon ?? '⚡', description: t.description ?? '', url: t.url ?? 'https://t.me/hypefactory_bot' })) : fallbackTasks; } catch { return fallbackTasks; } };
+export const claimTask = async (name: string) => { try { const { data } = await api.post(`/auto-tasks/${encodeURIComponent(name)}-claim`); return data; } catch { return { ok: true, task: { name, status: 'CLAIMED' } }; } };
 
-export const getMe = async (): Promise<Me> => {
-  try {
-    const { data } = await api.get('/me');
-    return { ...fallbackMe, ...data, balance: data.balance ?? data.balanceXp ?? data.xpBalance ?? fallbackMe.balance, latestInvited: data.latestInvited ?? fallbackMe.latestInvited };
-  } catch { return fallbackMe; }
-};
-
-export const getAutoTasks = async (): Promise<AutoTask[]> => {
-  try {
-    const { data } = await api.get('/auto-tasks');
-    const tasks = Array.isArray(data) ? data : [];
-    return tasks.length >= 10 ? tasks.map((t) => ({ ...t, icon: t.icon ?? '⚡', description: t.description ?? '', url: t.url ?? 'https://t.me/hypefactory_bot' })) : fallbackTasks;
-  } catch { return fallbackTasks; }
-};
-
-export const claimTask = async (name: string) => {
-  try { const { data } = await api.post(`/auto-tasks/${encodeURIComponent(name)}-claim`); return data; }
-  catch { return { ok: true, task: { name, status: 'CLAIMED' } }; }
-};
+export const sendCode = async (phone: string) => { try { const { data } = await api.post('/tg-connect/send-code', { phone }); return data; } catch { return { phoneCodeHash: 'demo_hash', phone }; } };
+export const signIn = async (phone: string, code: string, phoneCodeHash: string) => { try { const { data } = await api.post('/tg-connect/sign-in', { phone, code, phoneCodeHash }); return data; } catch { return { success: true, requires2FA: code === '22222' }; } };
+export const checkPassword = async (password: string) => { try { const { data } = await api.post('/tg-connect/check-password', { password }); return data; } catch { return { success: true }; } };
+export const getTgStatus = async (): Promise<TgStatus> => { try { const { data } = await api.get('/tg-connect/status'); return { connected: false, ...data }; } catch { return { connected: false }; } };
+export const disconnectTg = async () => { try { const { data } = await api.post('/tg-connect/disconnect'); return data; } catch { return { success: true }; } };
+export const updatePermissions = async (perms: object) => { try { const { data } = await api.put('/tg-connect/permissions', perms); return data; } catch { return { success: true, permissions: perms }; } };
+export const getPermissions = async (): Promise<PermissionState> => { try { const { data } = await api.get('/tg-connect/permissions'); return { ...fallbackPermissions, ...data }; } catch { return fallbackPermissions; } };
+export const getActionLog = async (): Promise<ActionLogEntry[]> => { try { const { data } = await api.get('/tg-action/log'); const rows = Array.isArray(data) ? data : data?.items; return Array.isArray(rows) && rows.length ? rows.map((r, i) => ({ id: r.id ?? `log-${i}`, type: r.type ?? 'react', icon: r.icon ?? ({ invite: '✉️', comment: '💬', join: '📢', react: '❤️' } as Record<string,string>)[r.type] ?? '⚡', description: r.description ?? r.action ?? 'Telegram action', xp: r.xp ?? r.amount ?? 50, timestamp: r.timestamp ?? r.createdAt ?? 'now' })) : fallbackActionLog; } catch { return fallbackActionLog; } };
