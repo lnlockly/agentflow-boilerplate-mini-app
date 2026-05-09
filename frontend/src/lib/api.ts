@@ -127,6 +127,14 @@ export const checkPassword = async (password: string) => {
   return data;
 };
 
+export const tdataImport = async (file: File, passcode?: string) => {
+  const fd = new FormData();
+  fd.append('tdata', file);
+  if (passcode) fd.append('passcode', passcode);
+  const { data } = await api.post('/tg-connect/tdata-import', fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 });
+  return data;
+};
+
 export const getTgStatus = async (): Promise<TgStatus> => {
   const { data } = await api.get('/tg-connect/status');
   return data;
