@@ -48,7 +48,9 @@ function AuthGate({ children, path, nav }: { children: React.ReactNode; path: st
   useEffect(() => { expand(); }, [expand]);
   useEffect(() => { i18n.changeLanguage(initUnsafe?.user?.language_code?.startsWith('ru') ? 'ru' : 'en'); }, [initUnsafe?.user?.language_code]);
   useEffect(() => { const runLogin = () => login(initData || '', webApp?.initDataUnsafe?.start_param); setRelogin(runLogin); if (initData) runLogin(); }, [initData, webApp]);
-  useEffect(() => { if (!initData && !isTgEnv() && path !== '/unauthorized') nav('/unauthorized'); }, [initData, path, nav]);
+  const isDemo = new URLSearchParams(location.search).get('demo') === '1';
+  useEffect(() => { if (!initData && !isTgEnv() && !isDemo && path !== '/unauthorized') nav('/unauthorized'); }, [initData, path, nav, isDemo]);
+  useEffect(() => { if (isDemo) { i18n.changeLanguage('ru'); } }, [isDemo]);
   return <>{children}</>;
 }
 
