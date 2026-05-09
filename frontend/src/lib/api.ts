@@ -31,8 +31,22 @@ const createClient = (): AxiosInstance => {
     return config;
   });
   client.interceptors.response.use((r) => r, async (error: AxiosError) => {
-    const original = error.config as RetriableRequestConfig | undefined;
-    if (error.response?.status !== 401 || !original || original._retry || !reloginHandler) return Promise.reject(error);
+    const data = error.response?.data as any;
+    if (data && typeof data === 'object') {
+      const userMessage = data.detail || data.message || error.message;
+      const richErr = new Error(userMessage) as Error & { status?: number; code?: unknown; detail?: unknown; config?: RetriableRequestConfig };
+      (richErr as any).status = error.response?.status;
+      (richErr as any).code = data.message;
+      (richErr as any).detail = data.detail;
+      richErr.config = error.config as RetriableRequestConfig | undefined;
+      return Promise.reject(richErr);
+    }
+    return Promise.reject(error);
+  });
+  client.interceptors.response.use((r) => r, async (error: AxiosError) => {
+    const original = (error as any).config as RetriableRequestConfig | undefined;
+    const status = error.response?.status ?? (error as any).status;
+    if (status !== 401 || !original || original._retry || !reloginHandler) return Promise.reject(error);
     original._retry = true;
     await reloginHandler();
     const token = getStoredToken();
