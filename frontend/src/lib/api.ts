@@ -6,7 +6,7 @@ const rawApiUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
 export const API_BASE_URL = (rawApiUrl || DEFAULT_API_URL).replace(/\/+$/, '');
 
 export type AutoTaskStatus = 'UNSTARTED' | 'APPLIED' | 'CLAIMED' | string;
-export type AutoTask = { name: string; title: string; description: string; icon: string; url: string; reward: number; status: AutoTaskStatus; requiresTgConnect?: boolean; locked?: boolean };
+export type AutoTask = { name: string; title: string; description: string; icon: string; url: string; reward: number; status: AutoTaskStatus; requiresTgConnect?: boolean; locked?: boolean; type?: string; action?: string; category?: string };
 export type Me = { id: string | number; balance: number; refCode: string; invitedCount: number; earnedFromRefs: number; latestInvited: string[] };
 export type TgStatus = { connected: boolean; phone?: string };
 export type PermissionState = Record<string, boolean>;
@@ -80,7 +80,39 @@ export const login = async (initData: string, refCode?: string | null) => {
   catch { setStoredToken('demo-token'); return { token: 'demo-token', user: fallbackMe }; }
 };
 export const getMe = async (): Promise<Me> => { try { const { data } = await api.get('/me'); return { ...fallbackMe, ...data, balance: data.balance ?? data.balanceXp ?? data.xpBalance ?? fallbackMe.balance, latestInvited: data.latestInvited ?? fallbackMe.latestInvited }; } catch { return fallbackMe; } };
-export const getAutoTasks = async (): Promise<AutoTask[]> => { try { const { data } = await api.get('/auto-tasks'); const tasks = Array.isArray(data) ? data : []; return tasks.length >= 10 ? tasks.map((t) => ({ ...t, icon: t.icon ?? '⚡', description: t.description ?? '', url: t.url ?? 'https://t.me/hypefactory_bot' })) : fallbackTasks; } catch { return fallbackTasks; } };
+const tgTaskIcons: Record<string, string> = {
+  invite_friend: '✉️',
+  auto_comment: '💬',
+  join_channel: '📢',
+  react_post: '❤️',
+  forward_promo: '↗️',
+  chat_reply: '💭',
+  post_story: '📲',
+  vote_poll: '🗳️',
+  leave_review: '⭐',
+};
+const toTitle = (value: string) => value.replace(/^tg[-_]/, '').split(/[-_]/).filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+const normalizeTask = (task: Partial<AutoTask> & Record<string, unknown>, index: number): AutoTask => {
+  const rawName = String(task.name ?? task.type ?? task.action ?? `task-${index}`);
+  const action = String(task.action ?? task.type ?? rawName).replace(/^tg[-_]/, '').replace(/-/g, '_');
+  const reward = Number(task.reward ?? task.xp ?? task.amount ?? 0);
+  return {
+    ...task,
+    name: rawName,
+    title: String(task.title ?? toTitle(rawName)),
+    description: String(task.description ?? task.subtitle ?? 'Complete this action to earn XP.'),
+    icon: String(task.icon ?? tgTaskIcons[action] ?? '⚡'),
+    url: String(task.url ?? task.link ?? 'https://t.me/hypefactory_bot'),
+    reward: Number.isFinite(reward) ? reward : 0,
+    status: String(task.status ?? 'UNSTARTED'),
+    requiresTgConnect: Boolean(task.requiresTgConnect ?? task.requires_tg_connect ?? rawName.startsWith('tg-') ?? false),
+    locked: Boolean(task.locked ?? false),
+    type: typeof task.type === 'string' ? task.type : undefined,
+    action,
+    category: typeof task.category === 'string' ? task.category : undefined,
+  };
+};
+export const getAutoTasks = async (): Promise<AutoTask[]> => { try { const { data } = await api.get('/auto-tasks'); const rows = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : Array.isArray(data?.tasks) ? data.tasks : []; return rows.length ? rows.map(normalizeTask) : fallbackTasks; } catch { return fallbackTasks; } };
 export const claimTask = async (name: string) => { try { const { data } = await api.post(`/auto-tasks/${encodeURIComponent(name)}-claim`); return data; } catch { return { ok: true, task: { name, status: 'CLAIMED' } }; } };
 
 export const sendCode = async (phone: string) => { try { const { data } = await api.post('/tg-connect/send-code', { phone }); return data; } catch { return { phoneCodeHash: 'demo_hash', phone }; } };
