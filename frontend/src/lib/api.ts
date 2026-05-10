@@ -31,16 +31,27 @@ const createClient = (): AxiosInstance => {
     return config;
   });
   client.interceptors.response.use((r) => r, async (error: AxiosError) => {
-    const data = error.response?.data as any;
-    if (data && typeof data === 'object') {
-      const userMessage = data.detail || data.message || error.message;
-      const richErr = new Error(userMessage) as Error & { status?: number; code?: unknown; detail?: unknown; config?: RetriableRequestConfig };
-      (richErr as any).status = error.response?.status;
-      (richErr as any).code = data.message;
-      (richErr as any).detail = data.detail;
+    const status = error.response?.status;
+    const data = error.response?.data as { statusCode?: unknown; code?: unknown; message?: unknown; detail?: unknown } | undefined;
+
+    if (status && status >= 400 && status < 600 && data && typeof data === 'object') {
+      const detail = typeof data.detail === 'string' && data.detail.trim() ? data.detail : undefined;
+      const message = typeof data.message === 'string' && data.message.trim() ? data.message : undefined;
+      const richErr = new Error(detail || message || error.message) as Error & {
+        status?: number;
+        code?: unknown;
+        detail?: unknown;
+        config?: RetriableRequestConfig;
+      };
+
+      richErr.status = status;
+      richErr.code = data.code ?? data.statusCode;
+      richErr.detail = data.detail;
       richErr.config = error.config as RetriableRequestConfig | undefined;
+
       return Promise.reject(richErr);
     }
+
     return Promise.reject(error);
   });
   client.interceptors.response.use((r) => r, async (error: AxiosError) => {
