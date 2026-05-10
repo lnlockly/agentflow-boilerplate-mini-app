@@ -1,757 +1,453 @@
-# HypeFactory Mini App v2 — Design Doc
+# HypeFactory Mini App — Error Handling Design Doc
 
 **Status:** source of truth for implementation  
 **Kind:** `mini_app`  
 **Workspace:** `/workspace`  
-**Frontend role:** Telegram Mini App SPA for HypeFactory backend  
-**Backend base URL:** `VITE_API_URL=https://hypefactory-backend-v2.proj.agentflow.website/api` (temporary stub, must remain environment-driven)  
-**Bot username:** `VITE_BOT_USERNAME=hypefactory_bot`
+**Artifact:** Telegram Mini App SPA frontend  
+**API base:** `VITE_API_URL=https://hypefactory-backend-v2.proj.agentflow.website/api`  
+**Bot:** `VITE_BOT_USERNAME=hypefactory_bot`  
+**Focus:** typed, localized, Telegram-native error handling for auth, API, task claims, referral actions, navigation, and offline states.
 
 ---
 
-## 1. Boilerplate Baseline and Non-Negotiable Constraints
+## 1. Boilerplate Baseline and Constraints
 
-### 1.1 Required boilerplate
-The project starts from the curated boilerplate found via `find_boilerplate(kind='mini_app')`:
+Implementation starts from the curated mini-app boilerplate: `mini-app-fullstack` id `6`, repository `https://github.com/lnlockly/agentflow-boilerplate-mini-app`, branch `main`. The mandated first actions were executed: `find_boilerplate(kind='mini_app')` then `apply_boilerplate`. The apply step returned a platform copy-permission error (`cp: preserving times ... Operation not permitted`), but the workspace already contains the expected `frontend/` and `backend/` structure.
 
-- **ID:** `6`
-- **Name:** `mini-app-fullstack`
-- **Repo:** `https://github.com/lnlockly/agentflow-boilerplate-mini-app`
-- **Branch:** `main`
-- **Title:** `Telegram Mini App — React + aiogram`
-- **Relevant guarantees:** Vite + React + TypeScript + Tailwind v4, `@tailwindcss/vite` plugin, Telegram WebApp SDK CDN in `index.html`, correct mobile viewport meta, app title, Tailwind import in `index.css`.
+Protected files that must not be edited for this task:
+- `frontend/index.html` — keep Telegram SDK CDN, viewport meta, title.
+- `frontend/vite.config.ts` — keep Tailwind v4 Vite plugin.
+- Boilerplate meta files unrelated to app logic.
 
-`apply_boilerplate` was invoked first as required. The platform copy step returned `cp: preserving times ... Operation not permitted`, but the workspace already contains the expected boilerplate structure (`frontend`, `backend`, `.env.example`, `docker-compose.yml`, `README.md`). Implementation must treat these meta files as protected.
-
-### 1.2 Files implementers may customize
-Per project brief, coders must customize only:
-
+Primary allowed customization:
 - `frontend/src/App.tsx`
 - `frontend/src/components/**`
 - `frontend/src/lib/api.ts`
-- additional frontend feature files required by this design, such as hooks, shared constants, i18n setup, route/page components, provided they do **not** alter protected meta files.
 
-### 1.3 Protected files / do not touch
-Do **not** modify unless explicitly approved in a later design update:
-
-- `frontend/index.html` — must keep Telegram SDK CDN, viewport meta, title.
-- `frontend/vite.config.ts` — must keep `@tailwindcss/vite` plugin.
-- Existing boilerplate meta/scaffold files that are not required for app logic.
-
-### 1.4 Required stack
-Frontend must use:
-
-- React 18 + TypeScript + Vite
-- Tailwind CSS v4 through `@tailwindcss/vite`
-- Radix UI Themes in dark mode
-- `@vkruglikov/react-telegram-web-app` for `useInitData`, `useExpand`, `BackButton`, Telegram WebApp helpers
-- TanStack React Query for server cache
-- `react-modal-sheet` for bottom sheets
-- `react-i18next` for ru/en localization
-- `axios` for HTTP
+Additional app-logic files are allowed when needed: `lib/errors.ts`, `lib/auth.ts`, `lib/telegram.ts`, `lib/queryClient.ts`, `hooks/**`, `shared/consts/local-text.ts`, `i18n.ts`, `public/locales/{ru,en}.json`.
 
 ---
 
-## 2. Product Scope
+## 2. Scope
 
-HypeFactory Mini App v2 is a dark cyberpunk Telegram Mini App where users authenticate via Telegram `initData`, receive an app JWT, view XP balance, complete fast tasks, invite friends, inspect wallet placeholders, and complete onboarding/tutorial.
+HypeFactory Mini App is a dark cyberpunk Telegram Mini App SPA. It authenticates using Telegram `initData`, exchanges it for a JWT, shows XP balance, task lists, task detail bottom sheets, referral stats, wallet placeholder, tutorial, and unauthorized fallback.
 
-### 2.1 In scope
-- Telegram Mini App SPA with 6 routes: `/profile`, `/all-tasks`, `/friends`, `/wallet`, `/tutorial`, `/unauthorized`.
-- Protected auth flow: Telegram `initData` → backend login → JWT in `localStorage.hf_token` → authorized API requests.
-- Task list and bottom-sheet task detail with Go → 5 second delay → Claim flow.
-- Referral link generation and clipboard/share actions.
-- i18n ru/en with Telegram language auto-detect.
-- Fixed bottom navigation with 5 tabs.
-- Dark cyberpunk design with cyan glow.
+This document defines error handling for all six screens:
+1. `/profile`
+2. `/all-tasks`
+3. `/friends`
+4. `/wallet`
+5. `/tutorial`
+6. `/unauthorized`
 
-### 2.2 Out of scope
-- Video upload
-- Post-meme creation flow
-- Advertiser/project management system
-- Bybit verification
-- Apple/Solana auth
-- Real TON jetton minting or TonConnect integration beyond placeholder
+Goals:
+- No raw backend/Axios/JWT/initData errors in UI.
+- Every expected failure maps to a typed `AppError`.
+- All user-visible errors are localized in ru/en.
+- Retriable failures expose retry actions.
+- Stale cached data may be shown with clear warning.
+- Task claim flow remains consistent after network, auth, and conflict failures.
 
----
-
-## 3. Visual Design System
-
-### 3.1 Theme tokens
-Tailwind v4 theme tokens in `frontend/src/index.css` must expose the following semantic tokens. If boilerplate already contains theme configuration, implementers should extend it without changing protected meta assumptions.
-
-| Token | Hex | Purpose |
-| --- | --- | --- |
-| `color-bg-primary` | `#0B0B0B` | App root background |
-| `color-bg-secondary` | `#181818` | Elevated sections/sheets |
-| `color-bg-card` | `#090909` | Cards |
-| `color-brand` | `#38DBFF` | Cyan brand, active nav, highlights |
-| `color-success` | `#36D0A1` | Success/claim states |
-| `color-text-primary` | `#FFFFFF` | Primary text |
-| `color-text-muted` | `#A8A8A8` | Secondary text |
-
-### 3.2 Glow animation
-Required Tailwind keyframes:
-
-```css
-@keyframes glow {
-  from { box-shadow: 0 0 8px rgb(56 219 255 / 0.4); }
-  to { box-shadow: 0 0 16px rgb(56 219 255 / 0.8); }
-}
-```
-
-Required utility/token:
-
-```css
---animate-glow: glow 3s ease-in-out infinite alternate;
-```
-
-Cards that must use glow styling:
-- `BalanceCard` on `/profile`
-- Big `BalanceCard` on `/wallet`
-- Featured FAST TASKS `GlowingCard` on `/profile`
-- Selected/highlighted task affordances where useful without harming readability
-
-### 3.3 Layout primitives
-- Root app shell: `h-[100dvh] bg-bg-primary text-text-primary flex flex-col overflow-hidden` (or Tailwind token equivalent `h-100dvh` if available).
-- Header: fixed top, mobile top padding roughly `pt-[10vh]`, XP balance left, language switcher right.
-- Main content: `flex-1 overflow-y-auto px-4`, padded to avoid fixed header and bottom nav overlap.
-- Bottom nav: fixed bottom, `h-[10vh]`, 5-column grid.
-- Modal sheet: `react-modal-sheet`, dark background, rounded top corners, safe-area bottom padding.
-- Radix Themes provider: dark appearance globally.
+Out of scope: video upload, post-meme creation, advertiser system, Bybit verification, Apple/Solana auth, real TON minting.
 
 ---
 
-## 4. Information Architecture and Routes
+## 3. Visual/Error UX Rules
 
-### 4.1 Route table
+Severity levels:
 
-| Route | Protection | Purpose | BackButton behavior |
-| --- | --- | --- | --- |
-| `/profile` | Protected | Dashboard/home | Hidden |
-| `/all-tasks` | Protected | Task list and detail sheet | Shown when task detail sheet is open; otherwise optional hidden |
-| `/friends` | Protected | Referral link, stats, latest invited | Hidden by default |
-| `/wallet` | Protected | XP wallet and transaction history | Hidden by default |
-| `/tutorial` | Protected | 3-slide onboarding/help carousel | Shown; goes previous/close depending slide |
-| `/unauthorized` | Public | Fallback when no Telegram initData | Hidden |
-| `*` | Protected redirect | Redirect to `/profile` | N/A |
+| Severity | Use case | UI treatment |
+|---|---|---|
+| `info` | Disabled feature, TON placeholder | muted card, cyan icon |
+| `warning` | offline, timeout, stale cache | top banner or toast, retry |
+| `error` | failed API operation | inline card/sheet error, retry if safe |
+| `fatal` | no Telegram context, auth loop | full-screen state or `/unauthorized` |
 
-### 4.2 BottomNav tabs
-Exactly 5 tabs:
+Tone: short cyberpunk copy, no technical jargon. Examples:
+- `Signal lost. Check connection and retry.`
+- `Factory is cooling down. Try again in a minute.`
+- `Task already claimed. Balance is syncing.`
 
-1. `/profile` — Home
-2. `/all-tasks` — Tasks
-3. `/friends` — Friends
-4. `/wallet` — Wallet
-5. `/tutorial` — Help
-
-Active tab visual state:
-- Text/icon color `text-brand`
-- `scale-105`
-- Smooth transform transition
-- Inactive tabs use muted color
+All text must be keyed via `LOCAL_TEXT` and translated in `ru.json` and `en.json`.
 
 ---
 
-## 5. Screen Specifications
+## 4. File Tree
 
-### 5.1 `/profile` — Dashboard
-Required components/content:
-
-- `BalanceCard` with current XP balance from `GET /api/me` or related auth-me response.
-  - Glow border.
-  - Click/tap navigates to `/wallet`.
-- Collapsible “What’s XP?” explainer.
-  - Starts collapsed by default.
-  - Explains XP is earned from tasks and referrals.
-- Quick actions grid, 2 columns:
-  - Daily check-in action; navigates to `/all-tasks` and highlights/opens daily task if supported.
-  - Invite friends action; navigates to `/friends`.
-- Featured FAST TASKS `GlowingCard`:
-  - Click/tap navigates to `/all-tasks`.
-- NFT placeholder section:
-  - Exactly 3 cards.
-  - Each shows “Coming Soon” / localized equivalent.
-
-### 5.2 `/all-tasks` — Task list
-Top feature cards, 2 columns:
-
-- `Post-Meme` placeholder card:
-  - Disabled state.
-  - Shows Coming Soon.
-- `Daily` card:
-  - Links to check-in/daily task flow if present in auto tasks; otherwise links to task list top.
-
-Auto task list:
-
-- Fetch `GET /api/auto-tasks` through React Query.
-- Render at least 10 task rows when backend returns 10+; in dev fallback/mock mode, render 10 default rows only if backend is unavailable and clearly isolate fallback.
-- Row component: `AutotaskCardDefaults`.
-- Row layout:
-  - Icon box: 36px square.
-  - Title.
-  - Reward badge: `+N XP` pill.
-  - Status icon/badge.
-- Clicking row opens `TaskDetailSheet` bottom sheet.
-
-Task detail sheet:
-
-- Uses `react-modal-sheet`.
-- Contains large icon, title, description if available, reward, status badge.
-- Status values: `UNSTARTED`, `APPLIED`, `CLAIMED`.
-- Action behavior:
-  1. Initial `UNSTARTED`: show `Go` button.
-  2. On `Go`, open task URL if present or simulate navigation intent, set local in-sheet timer.
-  3. Wait 5 seconds.
-  4. Enable `Claim` button.
-  5. On claim, call `POST /api/auto-tasks/{name}-claim`.
-  6. Invalidate React Query caches for `auto-tasks` and `me` so status/balance update.
-- BackButton closes sheet while open.
-
-### 5.3 `/friends` — Referrals
-Required content:
-
-- Referral link:
-  - Format: `https://t.me/${VITE_BOT_USERNAME}?startapp=ref_${refCode}` or Telegram-compatible equivalent required by backend.
-  - `refCode` comes from `GET /api/me`.
-- Copy button:
-  - Writes referral link to Clipboard API.
-  - Shows success toast/state.
-- Share button:
-  - Uses Telegram WebApp `openTelegramLink` with share/inline-query link where supported.
-  - Fallback: copy link and show message.
-- Stats:
-  - `invitedCount`
-  - `earnedFromRefs`
-- Latest invited list:
-  - Show up to 5 latest invited users.
-  - Empty state if none.
-
-### 5.4 `/wallet` — Wallet
-Required content:
-
-- Big `BalanceCard` with XP and glow.
-- TonConnect placeholder button:
-  - On click: `alert('TON integration coming')` or localized equivalent.
-  - Must not implement real wallet connection.
-- Buy tokens disabled stub.
-- Recent transactions list from API if available; otherwise empty state.
-
-### 5.5 `/tutorial` — Help/onboarding carousel
-Required behavior:
-
-- 3 slides:
-  1. Welcome
-  2. Earn XP
-  3. Invite friends
-- Buttons:
-  - `Skip` always available until completed.
-  - `Next` on slides 1–2.
-  - `Done` on slide 3.
-- Persistence:
-  - On `Skip` or `Done`, write `localStorage.onboardCompleted = 'true'`.
-  - Navigate to `/profile` after completion.
-- BackButton:
-  - If slide index > 0, go to previous slide.
-  - Else navigate to `/profile`.
-
-### 5.6 `/unauthorized`
-Public fallback when Telegram `initData` is absent.
-
-Required content:
-- Centered illustration/icon.
-- Clear message: “Open from Telegram” / localized text.
-- Optional helper text explaining the app must be launched from the Telegram bot.
-- No protected API requests.
-
----
-
-## 6. Authentication and Authorization Flow
-
-### 6.1 ProtectedRoute algorithm
-`ProtectedRoute` lives at App/router layer.
-
-1. Call `useInitData()` from `@vkruglikov/react-telegram-web-app`.
-2. Also read `window.Telegram?.WebApp?.initData` if library returns delayed/empty value.
-3. If no `initData`, redirect to `/unauthorized`.
-4. Extract referral code from `window.Telegram?.WebApp?.initDataUnsafe?.start_param`:
-   - Expected example: `ref_ABC123`.
-   - Normalize before sending: backend contract accepts raw `start_param` or parsed `refCode`; see API contract.
-5. `POST /api/auth/login` with `{ initData, refCode }`.
-6. Save returned JWT in `localStorage.hf_token`.
-7. Render protected route only after login succeeds or a valid token already exists and `GET /api/me` passes.
-8. On login failure: show retry UI; do not route to `/unauthorized` unless initData is missing.
-
-### 6.2 Axios interceptor
-`frontend/src/lib/api.ts` owns an `axios` instance:
-
-- Base URL: `import.meta.env.VITE_API_URL`.
-- Request interceptor:
-  - Adds `Authorization: Bearer ${localStorage.hf_token}` when token exists.
-- Response interceptor:
-  - On 401 once per failed request:
-    1. Try re-login using current Telegram `initData`.
-    2. Store fresh token.
-    3. Retry original request.
-  - Prevent infinite loops with `_retry` flag.
-  - If no initData during 401, clear token and navigate/signal unauthorized.
-
-### 6.3 React Query hooks
-Recommended hooks:
-
-- `useAuthLogin()` mutation or internal auth service.
-- `useAuthMe()` query: `GET /api/me`, enabled only after token exists.
-- `useAutoTasks()` query.
-- `useClaimAutoTask(name)` mutation with invalidation of `['auto-tasks']` and `['me']`.
-- `useTransactions()` query for wallet.
-
----
-
-## 7. API Contracts
-
-All paths below are relative to `VITE_API_URL`, currently `https://hypefactory-backend-v2.proj.agentflow.website/api`.
-
-### 7.1 `POST /api/auth/login`
-Purpose: validate Telegram initData and issue app JWT.
-
-Request:
-
-```json
-{
-  "initData": "query_id=...&user=...&hash=...",
-  "refCode": "ABC123",
-  "startParam": "ref_ABC123"
-}
-```
-
-Implementation note: frontend may send both `refCode` and `startParam` for compatibility; backend should ignore unknown fields.
-
-Success response:
-
-```json
-{
-  "token": "jwt-token",
-  "user": {
-    "id": 123,
-    "telegramId": "777000",
-    "username": "alice",
-    "firstName": "Alice",
-    "languageCode": "en",
-    "xpBalance": 1250,
-    "refCode": "ABC123",
-    "invitedCount": 4,
-    "earnedFromRefs": 200
-  }
-}
-```
-
-Errors:
-- `400` invalid payload
-- `401` invalid Telegram signature/initData
-- `500` backend error
-
-### 7.2 `GET /api/me`
-Headers: `Authorization: Bearer <token>`
-
-Success response:
-
-```json
-{
-  "id": 123,
-  "telegramId": "777000",
-  "username": "alice",
-  "firstName": "Alice",
-  "lastName": "Factory",
-  "languageCode": "en",
-  "xpBalance": 1250,
-  "refCode": "ABC123",
-  "invitedCount": 4,
-  "earnedFromRefs": 200,
-  "latestInvited": [
-    { "id": 456, "username": "bob", "firstName": "Bob", "joinedAt": "2026-05-08T12:00:00.000Z" }
-  ]
-}
-```
-
-### 7.3 `GET /api/auto-tasks`
-Headers: `Authorization: Bearer <token>`
-
-Success response:
-
-```json
-[
-  {
-    "name": "join_telegram_channel",
-    "title": "Join Telegram channel",
-    "description": "Subscribe to the HypeFactory channel.",
-    "icon": "telegram",
-    "url": "https://t.me/hypefactory",
-    "rewardXp": 50,
-    "status": "UNSTARTED"
-  }
-]
-```
-
-Frontend requirements:
-- `name` is used for claim endpoint path.
-- `status` must be treated as enum: `UNSTARTED | APPLIED | CLAIMED`.
-- Unknown statuses render as muted/disabled with safe fallback text.
-
-### 7.4 `POST /api/auto-tasks/{name}-claim`
-Example: `POST /api/auto-tasks/join_telegram_channel-claim`
-
-Headers: `Authorization: Bearer <token>`
-
-Request body: `{}` unless backend later requires proof payload.
-
-Success response:
-
-```json
-{
-  "ok": true,
-  "task": {
-    "name": "join_telegram_channel",
-    "status": "CLAIMED",
-    "rewardXp": 50
-  },
-  "xpBalance": 1300
-}
-```
-
-Errors:
-- `400` task cannot be claimed yet
-- `404` unknown task
-- `409` already claimed
-- `401` unauthorized; interceptor retries login once
-
-### 7.5 `GET /api/transactions`
-Headers: `Authorization: Bearer <token>`
-
-Success response:
-
-```json
-[
-  {
-    "id": "tx_1",
-    "type": "TASK_REWARD",
-    "amountXp": 50,
-    "title": "Task reward",
-    "createdAt": "2026-05-08T12:00:00.000Z"
-  }
-]
-```
-
-If backend does not support this endpoint yet, wallet must show a safe empty state and log no noisy errors to users.
-
----
-
-## 8. Data Schema / Frontend Types
-
-### 8.1 TypeScript domain types
-
-```ts
-export type TaskStatus = 'UNSTARTED' | 'APPLIED' | 'CLAIMED';
-
-export interface AuthLoginRequest {
-  initData: string;
-  refCode?: string | null;
-  startParam?: string | null;
-}
-
-export interface AuthLoginResponse {
-  token: string;
-  user: User;
-}
-
-export interface User {
-  id: number;
-  telegramId: string;
-  username?: string | null;
-  firstName?: string | null;
-  lastName?: string | null;
-  languageCode?: 'ru' | 'en' | string | null;
-  xpBalance: number;
-  refCode: string;
-  invitedCount: number;
-  earnedFromRefs: number;
-  latestInvited?: InvitedUser[];
-}
-
-export interface InvitedUser {
-  id: number;
-  username?: string | null;
-  firstName?: string | null;
-  joinedAt: string;
-}
-
-export interface AutoTask {
-  name: string;
-  title: string;
-  description?: string | null;
-  icon?: string | null;
-  url?: string | null;
-  rewardXp: number;
-  status: TaskStatus;
-}
-
-export interface ClaimTaskResponse {
-  ok: boolean;
-  task: Pick<AutoTask, 'name' | 'status' | 'rewardXp'>;
-  xpBalance: number;
-}
-
-export interface Transaction {
-  id: string;
-  type: 'TASK_REWARD' | 'REF_REWARD' | 'PURCHASE' | 'ADJUSTMENT' | string;
-  amountXp: number;
-  title: string;
-  createdAt: string;
-}
-```
-
-### 8.2 Local storage keys
-
-| Key | Type | Owner | Purpose |
-| --- | --- | --- | --- |
-| `hf_token` | string| App auth | JWT for Authorization header |
-| `onboardCompleted` | `'true'` | Tutorial | Marks tutorial as completed |
-| `i18nextLng` | string | i18next | Selected language if user switches manually |
-
-### 8.3 Derived/referral data
-
-Referral URL is derived, not stored:
-
-```ts
-const refLink = `https://t.me/${botUsername}?startapp=ref_${user.refCode}`;
-```
-
-`start_param` parsing rules:
-- `ref_ABC123` → `refCode = 'ABC123'`
-- missing/unknown format → `refCode = null`, still send raw `startParam` for backend compatibility
-
----
-
-## 9. File Tree Preset
-
-Target frontend tree. Existing boilerplate may contain additional files; do not delete useful scaffold files unless implementation requires cleanup.
-
-```txt
+```text
 /workspace
 ├── docs/
 │   └── design.md
 ├── frontend/
-│   ├── index.html                 # protected boilerplate meta: do not edit
-│   ├── vite.config.ts             # protected: must keep @tailwindcss/vite
+│   ├── index.html                         # protected
+│   ├── vite.config.ts                     # protected
 │   ├── src/
-│   │   ├── App.tsx                # app providers, router, ProtectedRoute
-│   │   ├── index.css              # Tailwind v4 import + theme tokens + glow
-│   │   ├── main.tsx
+│   │   ├── App.tsx                        # routes, ProtectedRoute, ErrorBoundary
 │   │   ├── components/
-│   │   │   ├── app-shell/
-│   │   │   │   ├── AppShell.tsx
-│   │   │   │   ├── Header.tsx
-│   │   │   │   └── BottomNav.tsx
-│   │   │   ├── cards/
-│   │   │   │   ├── BalanceCard.tsx
-│   │   │   │   ├── GlowingCard.tsx
-│   │   │   │   └── NftPlaceholderCard.tsx
-│   │   │   ├── tasks/
-│   │   │   │   ├── AutoTaskList.tsx
-│   │   │   │   ├── AutotaskCardDefaults.tsx
-│   │   │   │   └── TaskDetailSheet.tsx
-│   │   │   └── ui/
-│   │   │       ├── Button.tsx
-│   │   │       ├── Badge.tsx
-│   │   │       ├── Collapse.tsx
-│   │   │       └── EmptyState.tsx
+│   │   │   ├── AppErrorBoundary.tsx       # render crash fallback
+│   │   │   ├── ErrorState.tsx             # full/section error UI
+│   │   │   ├── OfflineBanner.tsx          # navigator.onLine warning
+│   │   │   ├── RetryButton.tsx            # shared retry CTA
+│   │   │   ├── ToastHost.tsx              # app notifications
+│   │   │   ├── BalanceCard.tsx            # loading/error fallback
+│   │   │   ├── BottomNav.tsx              # safe active route fallback
+│   │   │   ├── TaskDetailSheet.tsx        # claim inline errors
+│   │   │   └── TaskRow.tsx                # status/error rendering
 │   │   ├── hooks/
-│   │   │   ├── useAuth.ts
-│   │   │   ├── useBackButton.ts
-│   │   │   ├── useTelegramLanguage.ts
-│   │   │   └── useToastState.ts
+│   │   │   ├── useAuthMe.ts
+│   │   │   ├── useAutoTasks.ts
+│   │   │   ├── useTaskClaimFlow.ts
+│   │   │   ├── useReferral.ts
+│   │   │   └── useTelegramBackButton.ts
 │   │   ├── lib/
-│   │   │   ├── api.ts             # axios instance, interceptors, API methods
-│   │   │   ├── queryClient.ts
-│   │   │   └── telegram.ts
-│   │   ├── pages/
-│   │   │   ├── ProfilePage.tsx
-│   │   │   ├── AllTasksPage.tsx
-│   │   │   ├── FriendsPage.tsx
-│   │   │   ├── WalletPage.tsx
-│   │   │   ├── TutorialPage.tsx
-│   │   │   └── UnauthorizedPage.tsx
-│   │   ├── shared/
-│   │   │   ├── consts/
-│   │   │   │   └── local-text.ts  # LOCAL_TEXT enum
-│   │   │   └── types.ts
-│   │   └── i18n.ts
-│   └── public/
-│       └── locales/
-│           ├── en.json
-│           └── ru.json
-└── backend/                       # boilerplate backend/bot area; not part of SPA scope
+│   │   │   ├── api.ts                     # axios, interceptors
+│   │   │   ├── auth.ts                    # login/token/re-login guard
+│   │   │   ├── errors.ts                  # AppError model/mappers
+│   │   │   ├── queryClient.ts             # retry policy
+│   │   │   └── telegram.ts                # safe TG wrappers
+│   │   ├── shared/consts/local-text.ts    # LOCAL_TEXT enum
+│   │   └── i18n.ts                        # language detection/fallbacks
+│   └── public/locales/
+│       ├── en.json
+│       └── ru.json
+└── backend/                               # unchanged for this design
 ```
 
 ---
 
-## 10. I18N Design
+## 5. Runtime Architecture
 
-### 10.1 Required files
-- `frontend/src/shared/consts/local-text.ts` exports `LOCAL_TEXT` enum/object of translation keys.
-- `frontend/public/locales/ru.json`
-- `frontend/public/locales/en.json`
-- `frontend/src/i18n.ts` initializes `react-i18next`.
+Error handling layers:
+1. `lib/api.ts`: catches Axios/network/timeout failures.
+2. `lib/auth.ts`: login, token storage, guarded 401 re-login.
+3. `lib/errors.ts`: converts unknown errors into `AppError`.
+4. React Query hooks: retry, stale cache, invalidation.
+5. Components: localized banners, cards, bottom-sheet inline errors.
+6. `AppErrorBoundary`: catches render-time crashes.
 
-### 10.2 Language detection order
-1. Manual language selection stored by i18next/localStorage.
-2. `window.Telegram.WebApp.initDataUnsafe.user.language_code`.
-3. Browser language.
-4. Fallback: `en`.
-
-Supported final languages:
-- `ru`
-- `en`
-
-Any other Telegram language maps to `en`.
-
-### 10.3 Language switcher
-Header right-side control toggles `ru`/`en`. UI must update without reload.
-
----
-
-## 11. State, Cache, and Error Handling
-
-### 11.1 React Query keys
-Recommended keys:
+### Required `AppError` contract
 
 ```ts
-['me']
-['auto-tasks']
-['transactions']
+export type AppErrorCode =
+  | 'NO_TELEGRAM_INIT_DATA'
+  | 'AUTH_LOGIN_FAILED'
+  | 'AUTH_RETRY_EXHAUSTED'
+  | 'UNAUTHORIZED'
+  | 'NETWORK_OFFLINE'
+  | 'NETWORK_TIMEOUT'
+  | 'SERVER_UNAVAILABLE'
+  | 'VALIDATION_FAILED'
+  | 'TASK_ALREADY_CLAIMED'
+  | 'TASK_NOT_READY_TO_CLAIM'
+  | 'TASK_CLAIM_FAILED'
+  | 'REFERRAL_COPY_FAILED'
+  | 'TELEGRAM_SHARE_FAILED'
+  | 'I18N_LOAD_FAILED'
+  | 'UNKNOWN_ERROR';
+
+export type AppErrorSeverity = 'info' | 'warning' | 'error' | 'fatal';
+
+export interface AppError {
+  code: AppErrorCode;
+  severity: AppErrorSeverity;
+  messageKey: string;
+  status?: number;
+  retryable: boolean;
+  correlationId?: string;
+  safeDetails?: string;
+  cause?: unknown;
+}
 ```
 
-Claim mutation invalidates:
-- `['auto-tasks']`
-- `['me']`
-- optionally `['transactions']`
-
-### 11.2 Loading states
-- App boot/auth: full-screen dark loader with cyan accent.
-- Task list loading: skeleton rows.
-- Balance loading: skeleton pulse card.
-
-### 11.3 Error states
-- Auth login failure: retry button and small diagnostic text, no token leakage.
-- API 401: interceptor relogin once.
-- API unavailable: show user-safe retry state; for tasks only, optional local demo tasks can appear if explicitly labelled fallback in dev/preview.
-- Clipboard failure: show manual link text and “select/copy” hint.
+Sanitization rules:
+- Never log/render `Authorization`, JWT, Telegram `initData`, `hash`, raw user JSON, or request bodies containing secrets.
+- Console logs may include only `AppError.code`, `status`, `correlationId`, and sanitized `safeDetails`.
+- Do not persist error payloads to `localStorage`.
 
 ---
 
-## 12. Telegram Mini App Integration
+## 6. API Contracts and Error Mapping
 
-### 12.1 Startup
-- Call `useExpand()` once at app shell startup to maximize viewport.
-- Respect `100dvh` for mobile viewport.
-- Use safe-area padding near bottom nav and modal sheet.
+### 6.1 Environment contract
+Required env values:
+```text
+VITE_API_URL=https://hypefactory-backend-v2.proj.agentflow.website/api
+VITE_BOT_USERNAME=hypefactory_bot
+```
+If `VITE_API_URL` is missing, render fatal localized config error; do not silently call relative endpoints.
 
-### 12.2 BackButton
-- Hidden on `/profile`.
-- Hidden on `/unauthorized`.
-- On `/tutorial`: previous slide or route to `/profile`.
-- On `/all-tasks` with open task detail sheet: close sheet.
-- Avoid double handlers; centralize in `useBackButton`.
+### 6.2 Auth login
+`POST /api/auth/login`
 
-### 12.3 Telegram links/share
-- Referral share should prefer Telegram WebApp/openTelegramLink.
-- External task `Go` may use `window.Telegram.WebApp.openLink(url)` or `window.open(url, '_blank')` fallback.
+Request:
+```ts
+interface LoginRequest { initData: string; refCode?: string }
+```
+Response:
+```ts
+interface LoginResponse { token: string; user: Me }
+```
+Error mapping:
+| Condition | AppError | UI |
+|---|---|---|
+| no initData | `NO_TELEGRAM_INIT_DATA` | redirect `/unauthorized` |
+| 400/403 invalid initData | `AUTH_LOGIN_FAILED` | unauthorized state |
+| network/timeout | `NETWORK_TIMEOUT` | protected-route retry |
+| 5xx | `SERVER_UNAVAILABLE` | retry card |
+| repeated 401 after re-login | `AUTH_RETRY_EXHAUSTED` | clear token, unauthorized/retry |
+
+### 6.3 Current user
+`GET /api/me` with `Authorization: Bearer <hf_token>`.
+
+```ts
+interface Me {
+  id: string;
+  telegramId: string;
+  username?: string;
+  firstName?: string;
+  languageCode?: string;
+  balanceXp: number;
+  refCode: string;
+  invitedCount: number;
+  earnedFromRefs: number;
+}
+```
+401 behavior: interceptor performs exactly one guarded re-login using current Telegram `initData`, then retries original request once. If it fails, clear `hf_token` and emit `AUTH_RETRY_EXHAUSTED`.
+
+### 6.4 Auto tasks
+`GET /api/auto-tasks`
+
+```ts
+interface AutoTask {
+  name: string;
+  title: string;
+  description?: string;
+  icon?: string;
+  rewardXp: number;
+  status: 'UNSTARTED' | 'APPLIED' | 'CLAIMED';
+  goUrl?: string;
+}
+type AutoTasksResponse = AutoTask[];
+```
+Error behavior:
+- Network/5xx: use cached list if present plus warning; otherwise `ErrorState` with retry.
+- Empty list: render empty state, not an error.
+- Invalid row: skip row and log sanitized warning.
+- Production acceptance requires 10+ valid rows.
+
+### 6.5 Claim task
+`POST /api/auto-tasks/{name}-claim`
+
+Response:
+```ts
+interface ClaimResponse { task: AutoTask; balanceXp: number; transaction?: Transaction }
+```
+State machine:
+```text
+idle -> opened -> go_clicked -> waiting_5s -> claim_enabled -> claiming -> claimed
+                                                └-> claim_error
+```
+Rules:
+- Encode `{name}` path segment.
+- `Go` opens `goUrl` through Telegram-safe wrapper if available, then starts 5 second timer.
+- Claim disabled until timer completes and while request is in flight.
+- Success: invalidate `['auto-tasks']` and `['me']`; update balance from response if present.
+- 409: `TASK_ALREADY_CLAIMED`, mark claimed, invalidate queries.
+- 400/not ready: `TASK_NOT_READY_TO_CLAIM`, keep sheet open.
+- Network/5xx: `TASK_CLAIM_FAILED`, keep Claim enabled for retry.
+
+### 6.6 Referral
+Frontend-composed link:
+```ts
+const refLink = `https://t.me/${VITE_BOT_USERNAME}?startapp=ref_${me.refCode}`;
+```
+Copy uses `navigator.clipboard.writeText`; on failure show `REFERRAL_COPY_FAILED` and visible text field. Share uses Telegram `openTelegramLink` when available; fallback to `window.open(refLink, '_blank')`; if unavailable show `TELEGRAM_SHARE_FAILED`.
+
+### 6.7 Wallet transactions
+```ts
+interface Transaction {
+  id: string;
+  type: 'TASK_REWARD' | 'REFERRAL_REWARD' | 'PURCHASE' | 'SYSTEM';
+  amountXp: number;
+  createdAt: string;
+  title?: string;
+}
+```
+Transactions failure must not block balance rendering. TON and buy-token buttons are `info` stubs with localized `TON integration coming` message.
+
+---
+
+## 7. Data Schema
+
+No frontend database. Browser persistence only:
+
+| Key | Type | Sensitive | Rule |
+|---|---|---|---|
+| `hf_token` | JWT string | yes | set after login, remove on auth exhaustion |
+| `onboardCompleted` | `'true'` | no | set on Skip/Done |
+| `i18nextLng` | language code | no | i18next-managed fallback |
+
+React Query keys:
+| Key | Source | Stale time | Retry |
+|---|---|---:|---:|
+| `['me']` | `GET /api/me` | 30s | 1 except 401/403 |
+| `['auto-tasks']` | `GET /api/auto-tasks` | 30s | 2 for network/5xx |
+| `['transactions']` | optional future endpoint | 60s | 1 |
+
+---
+
+## 8. Screen-Level Error Handling
+
+### `/unauthorized`
+Shown when `initData` is absent/invalid. UI: centered illustration, localized title, `Open from Telegram`, bot link using `VITE_BOT_USERNAME`. No JWT, no retry loop.
+
+### `/profile`
+`BalanceCard` shows skeleton while `me` loads. If `me` fails and no cache: section `ErrorState` with retry. If cached: show stale balance plus warning. Quick actions and NFT placeholders remain visible when safe.
+
+### `/all-tasks`
+Task list uses cached tasks on transient failures. Task detail bottom sheet renders inline claim errors and never closes automatically on failure. Status badges: `UNSTARTED`, `APPLIED`, `CLAIMED`. Disabled Post-Meme card is info, not error.
+
+### `/friends`
+If `me` unavailable, referral link area shows retry state. Clipboard/share errors use toast + manual copy fallback. Stats default to skeleton/loading, not zero, until data is known.
+
+### `/wallet`
+Balance is primary; transaction failures render local empty/error state only in transaction section. TON placeholder shows info toast/alert.
+
+### `/tutorial`
+Carousel must work offline. Skip/Done writes `onboardCompleted`; if localStorage write fails, keep UI navigable and show warning toast.
+
+### Navigation and BackButton
+BottomNav active route fallback: unknown route redirects to `/profile` if authorized, `/unauthorized` otherwise. Telegram BackButton visible on `/all-tasks` task detail and `/tutorial`, hidden on `/profile`; wrapper must no-op outside Telegram.
+
+---
+
+## 9. I18N Contract
+
+`LOCAL_TEXT` must include at least:
+- `error.noTelegramInitData`
+- `error.authLoginFailed`
+- `error.authRetryExhausted`
+- `error.networkOffline`
+- `error.networkTimeout`
+- `error.serverUnavailable`
+- `error.taskAlreadyClaimed`
+- `error.taskNotReadyToClaim`
+- `error.taskClaimFailed`
+- `error.referralCopyFailed`
+- `error.telegramShareFailed`
+- `error.unknown`
+- `action.retry`
+- `action.openFromTelegram`
+- `action.copyManually`
+
+Language detection order:
+1. `WebApp.initDataUnsafe.user.language_code`
+2. existing `i18nextLng`
+3. browser language
+4. `en`
+
+If locale JSON fails to load, fallback to bundled English strings and emit `I18N_LOAD_FAILED` warning, not fatal.
+
+---
+
+## 10. React Query and Retry Policy
+
+Default query policy:
+```ts
+retry: (failureCount, error) => {
+  const appError = toAppError(error);
+  if (['UNAUTHORIZED', 'AUTH_RETRY_EXHAUSTED', 'NO_TELEGRAM_INIT_DATA'].includes(appError.code)) return false;
+  if (appError.status && appError.status >= 400 && appError.status < 500) return false;
+  return failureCount < 2;
+}
+```
+Mutations:
+- Claim mutation has no automatic retry; user retries manually to prevent duplicate claims.
+- Login mutation may be retried once for network/5xx only.
+
+---
+
+## 11. Observability and Debugging
+
+Frontend-only observability:
+- `console.warn('[HF_ERROR]', { code, status, correlationId })` in development.
+- No raw payloads or secrets.
+- If backend returns `x-correlation-id`, store it in `AppError.correlationId` and show short support text only for fatal errors.
+
+Recommended manual QA toggles (dev only): mock offline, mock 401 once, mock claim 409, mock 500. These must not be enabled in production by default.
+
+---
+
+## 12. Risk Register with Fallbacks
+
+| Risk | Impact | Fallback |
+|---|---|---|
+| Backend stub unavailable | Profile/tasks fail | Show cached data if available; otherwise localized retry cards; allow tutorial/wallet placeholders |
+| Telegram `initData` absent in browser preview | Protected routes inaccessible | `/unauthorized` page validates fallback; QA can mock Telegram only in dev builds |
+| 401 interceptor loops | Battery/network drain, bad UX | Single-flight re-login, `_retry` flag per request, max one retry then clear token |
+| Claim request duplicated by double tap | Duplicate backend operations | Disable Claim while `claiming`; backend conflict maps to `TASK_ALREADY_CLAIMED` |
+| Clipboard API blocked | Referral copy broken | Show manual copy text field and toast |
+| Telegram share API unavailable | Share button broken | Fallback to `window.open(refLink)`; if blocked show manual link |
+| Locale file fails | Blank/error copy | Bundled English fallback and `I18N_LOAD_FAILED` warning |
+| Stale balance after claim | User distrust | Invalidate `['me']`; optimistically use `balanceXp` from claim response |
+| Protected meta files accidentally edited | Acceptance failure | Code review/gate checks `git diff -- frontend/index.html frontend/vite.config.ts` must be empty |
+| Tailwind bundle/theme broken | Visual acceptance failure | Do not edit meta files; verify bundled CSS size >5KB in final UI task |
 
 ---
 
 ## 13. Measurable Acceptance Criteria
 
-Implementation is acceptable only if all relevant criteria below pass:
-
-1. **Auth:** In Telegram context with non-empty `initData`, first protected route calls `POST /api/auth/login`, stores JWT in `localStorage.hf_token`, and `GET /api/me` renders XP balance on `/profile`.
-2. **Unauthorized fallback:** Without Telegram `initData`, visiting `/profile` redirects to `/unauthorized` and shows centered “Open from Telegram” content with no protected API requests.
-3. **Profile UI:** `/profile` shows a glowing XP `BalanceCard`, collapsible “What’s XP?”, 2 quick-action cards, featured FAST TASKS glowing card, and exactly 3 NFT placeholder cards.
-4. **Tasks list:** `/all-tasks` renders 10+ task rows when backend returns 10+ tasks; each row has a 36px icon box, title, `+N XP` reward pill, and status indicator.
-5. **Claim flow:** Clicking a task opens a bottom sheet; `Go` starts a 5 second delay; `Claim` then calls `POST /api/auto-tasks/{name}-claim` and invalidates/refetches `auto-tasks` plus `me`, updating balance/status.
-6. **Friends:** `/friends` renders `https://t.me/hypefactory_bot?startapp=ref_<refCode>`, copy button writes to clipboard, share button invokes Telegram link/share fallback, and stats show `invitedCount` and `earnedFromRefs`.
-7. **Wallet:** `/wallet` shows big glowing XP `BalanceCard`, TonConnect placeholder alert, disabled Buy tokens stub, and recent transactions/empty state.
-8. **Tutorial:** `/tutorial` has exactly 3 slides (Welcome, Earn XP, Invite friends); Skip and Done set `localStorage.onboardCompleted = 'true'` and navigate to `/profile`.
-9. **Navigation:** BottomNav has exactly 5 tabs mapped to `/profile`, `/all-tasks`, `/friends`, `/wallet`, `/tutorial`; active tab is cyan and `scale-105` with transition.
-10. **HTML/meta:** Preview HTML keeps boilerplate head: Telegram SDK CDN, mobile viewport meta, and title are present.
-11. **CSS bundle:** Production build includes Tailwind v4 bundled CSS over 5 KB and contains dark theme defaults/tokens.
-12. **I18N:** When Telegram user language is `en`, initial UI text is English; language switcher can toggle to Russian without reload.
-13. **Performance:** Lighthouse mobile score on `/profile` is 85+ in preview, assuming backend latency is normal or mocked for audit.
-14. **No scope creep:** No real TON minting, video upload, post-meme creation, advertiser system, Bybit verification, or Apple/Solana auth is implemented.
+1. Without Telegram `initData`, opening `/profile` redirects to `/unauthorized` and shows localized `Open from Telegram`; no login POST is attempted.
+2. With valid mocked Telegram `initData`, first protected route performs exactly one `POST /api/auth/login`, stores `localStorage.hf_token`, then `GET /api/me` includes `Authorization: Bearer ...`.
+3. When `GET /api/me` returns 401 once, interceptor performs one re-login and retries the original request once; if the retry also returns 401, token is cleared and `AUTH_RETRY_EXHAUSTED` is shown.
+4. When `GET /api/auto-tasks` returns 500 and cached tasks exist, `/all-tasks` still renders cached rows plus a warning banner; with no cache it renders `ErrorState` with Retry.
+5. Task claim button remains disabled for the first 5 seconds after `Go`; during claim request it is ` disabled and cannot double-submit.
+6. A successful task claim invalidates both `['auto-tasks']` and `['me']`, updates visible XP balance from `ClaimResponse.balanceXp` when present, and closes or marks the sheet as claimed.
+7. A 409 claim response maps to `TASK_ALREADY_CLAIMED`, marks the task as claimed, and does not show a fatal error.
+8. Clipboard failure on `/friends` shows `REFERRAL_COPY_FAILED` toast and a visible manual-copy referral link.
+9. All `AppErrorCode` values have ru and en translations; no user-facing error string is hardcoded in task/auth components.
+10. Offline mode (`navigator.onLine=false` or failed network) shows `OfflineBanner` within 1 second and keeps bottom navigation usable.
+11. `frontend/index.html` and `frontend/vite.config.ts` remain unchanged by the error-handling implementation.
+12. No console log or rendered text contains JWT, `initData`, `Authorization`, or Telegram `hash` values in normal error flows.
+13. `/tutorial` remains usable without network and persists `onboardCompleted` on Skip/Done; localStorage write failure shows warning but does not block navigation.
+14. `AppErrorBoundary` catches a forced render error and displays localized full-screen retry/reset UI instead of a blank page.
 
 ---
 
-## 14. Risk Register and Fallbacks
+## 14. Eliza-Native Usage Section
 
-| Risk | Impact | Likelihood | Fallback / Mitigation |
-| --- | --- | --- | --- |
-| `apply_boilerplate` copy error due file permissions | Scaffold may be partial | Medium | Workspace already has boilerplate-like tree; verify protected files before coding; do not alter meta files. |
-| Telegram `initData` unavailable in browser preview | Protected pages redirect to unauthorized, hard to test | High | Add dev-only documented mock mode only if later approved; otherwise test `/unauthorized` in browser and auth flow in Telegram. |
-| Backend stub URL unavailable | Tasks/profile cannot load | Medium | Show retry states; optional clearly labelled local fallback task rows for preview only; never fake successful claim as real backend result. |
-| 401 interceptor infinite loop | Bad UX/API storm | Medium | Add `_retry` flag and single-flight relogin guard. |
-| React Query stale balance after claim | Acceptance criterion 5 fails | Medium | Always invalidate `['me']`, `['auto-tasks']`, and optionally transactions after claim. |
-| Clipboard API blocked | Referral copy fails | Medium | Show ref link in selectable text and fallback toast. |
-| Telegram share URL unsupported on some clients | Share button unreliable | Medium | Fallback to copied link and user instruction. |
-| Tailwind token naming mismatch | Visual requirements fail | Medium | Centralize classes/constants; build-grep CSS for tokens/glow. |
-| Bottom nav overlaps content on mobile | Poor UX | Medium | Add bottom padding equal to nav height plus safe-area; use `100dvh`. |
-| i18n files missing keys | Mixed language UI | Medium | Use `LOCAL_TEXT` enum and type/CI grep for key coverage where possible. |
-| Lighthouse below 85 due heavy libraries | Acceptance criterion 13 fails | Low/Medium | Lazy-load pages/sheets where reasonable, avoid large images, keep placeholders CSS/SVG. |
+This project is implemented inside AgentFlow/Eliza-style multi-agent workflow. The design is the single source of truth for planner, coder, tester, critic, and auditor agents.
 
----
+Agent rules:
+- Coder agents must read this document before changing frontend error handling.
+- Use MCP/code-exec operations in `/workspace`; do not create a new project pod.
+- Keep secrets out of files and commits. `VITE_API_URL` and `VITE_BOT_USERNAME` may be documented; tokens/JWT/initData must never be committed.
+- Before editing shared repo: run `cd /workspace && git pull --ff-only`.
+- After edits: add only task-owned files, commit with agent slug, and push.
+- If implementing UI, do not touch protected meta files from the boilerplate.
+- Tester agents should verify acceptance criteria through build, preview, mocked network responses, and Telegram/no-Telegram scenarios.
+- Auditor agents should check this design sections: file tree, API contracts, data schema, measurable acceptance criteria, risk register with fallbacks, and Eliza-native usage.
 
-## 15. Eliza-native Usage Section
-
-This project is implemented by an AgentFlow/Eliza-native team. The following operational rules apply:
-
-1. **Design doc is source of truth.** Coders must read `/workspace/docs/design.md` before modifying frontend code.
-2. **Shared workspace discipline.** Before edits: `cd /workspace && git pull --ff-only` (after safe.directory setup if needed). After edits: run checks, `git add`, `git commit -m "<summary> [<agent_slug>]"`, `git push`.
-3. **Tooling.** All filesystem/code operations must go through MCP `code-exec` tools against project `proj-4yd1s6x1`.
-4. **Protected boilerplate contract.** Do not edit `frontend/index.html` or `frontend/vite.config.ts`; implementation focuses on `App.tsx`, components, hooks, i18n, and `lib/api.ts`.
-5. **Secrets/env.** Do not hardcode secrets. `VITE_API_URL` and `VITE_BOT_USERNAME` come from env. JWT is runtime localStorage only.
-6. **Validation before handoff.** Coder must run production build, inspect generated HTML/CSS, and provide preview URL/HTTP status when launching service.
-7. **Testing roles.** Web tester should verify routes, unauthorized fallback, bottom sheet flow, nav active states, and i18n. Auditor should grep for acceptance-critical strings/endpoints and check no protected meta files were changed.
+Recommended implementation order:
+1. Add `lib/errors.ts` and `LOCAL_TEXT` keys/translations.
+2. Harden `lib/api.ts` and `lib/auth.ts` with typed mapping and guarded 401 retry.
+3. Add ErrorBoundary, ErrorState, OfflineBanner, RetryButton.
+4. Wire React Query retry policy.
+5. Apply screen-level handling to profile/tasks/friends/wallet/tutorial/unauthorized.
+6. Add tests/manual QA scripts for no initData, 401 retry, 500 tasks, claim 409, clipboard failure, offline.
 
 ---
 
-## 16. Implementation Notes for Next Coder
+## 15. Validation Checklist for Future Coders
 
-- Start by verifying boilerplate files exist and contain expected protected metadata.
-- Install required deps only if not already present:
-  - `@radix-ui/themes`
-  - `@vkruglikov/react-telegram-web-app`
-  - `@tanstack/react-query`
-  - `react-modal-sheet`
-  - `react-i18next`, `i18next`, optionally `i18next-http-backend` / browser language detector
-  - `axios`
-  - router package if boilerplate lacks it (`react-router-dom`)
-- Keep UI resilient if API responses have extra fields.
-- Prefer small SVG/icon components or emoji-style placeholders to avoid asset weight.
-- Avoid implementing any out-of-scope flows as real functionality; disabled cards/stubs are enough.
-
----
-
-## 17. Verification Checklist for Design Handoff
-
-This design document is complete if it contains:
-
-- [x] Boilerplate reference and first-call result
-- [x] Protected file constraints
-- [x] File tree
-- [x] API contracts
-- [x] Data schema / frontend types
-- [x] Six route/screen specifications
-- [x] Auth flow with initData → JWT and 401 relogin retry
-- [x] I18N ru/en plan and `LOCAL_TEXT`
-- [x] Tailwind v4 tokens and glow animation
-- [x] 5-tab BottomNav spec
-- [x] ≥5 measurable acceptance criteria
-- [x] Risk register with fallbacks
-- [x] Eliza-native usage section
+Before marking implementation complete, verify:
+- `npm run build` succeeds.
+- Preview HTML keeps Telegram SDK CDN and viewport meta.
+- Bundled CSS is greater than 5KB and dark theme is default.
+- `/unauthorized` works in a normal browser without Telegram.
+- Mocked Telegram initData path logs in and renders `/profile` balance.
+- `/all-tasks` renders 10+ task rows in happy path.
+- Claim flow follows Go -> 5 second delay -> Claim -> invalidate queries.
+- ru/en language switch or Telegram language auto-detect changes error strings.
+- No protected meta files changed.
+- No secrets appear in git diff or console output.
